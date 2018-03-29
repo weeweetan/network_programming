@@ -10,7 +10,6 @@
 #include <sys/socket.h>
 #include <netinet/in.h>
 #include <netdb.h>
-#include <w32api/ws2tcpip.h>
 #include "Practical.h"
 
 static const unsigned int TIMEOUT_SECS = 2;
@@ -29,7 +28,7 @@ int main(int argc, char *argv[]) {
     char *echoString = argv[2];
 
     size_t echoStringLen = strlen(echoString);
-    if (echoString > 1024)
+    if (echoStringLen > 1024)
         DieWithUserMessage(echoString, "too long");
 
     char *service = (argc == 4) ? argv[3] : "echo";
@@ -68,7 +67,7 @@ int main(int argc, char *argv[]) {
     socklen_t fromAddrLen = sizeof(fromAddr);
     alarm(TIMEOUT_SECS);
     char buffer[1024 + 1];
-    while ((numBytes = recvfrom(sock, buffer, 1024, 0, (struct sockaddr *)&fromAddr, fromAddrLen)) < 0) {
+    while ((numBytes = recvfrom(sock, buffer, 1024, 0, (struct sockaddr *)&fromAddr, &fromAddrLen)) < 0) {
         if (errno == EINTR) {
             if (tries < MAXTRIES) {
                 numBytes = sendto(sock, echoString, echoStringLen, 0, (

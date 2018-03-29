@@ -12,7 +12,6 @@
 #include <sys/types.h>
 #include <sys/socket.h>
 #include <netdb.h>
-#include <w32api/ws2tcpip.h>
 #include "Practical.h"
 
 void UseIdleTime();
@@ -72,14 +71,14 @@ void UseIdleTime() {
     sleep(3);
 }
 
-void SIGIOHnadler(int signalType) {
+void SIGIOHandler(int signalType) {
     ssize_t numByteRcvd;
     do {
         struct sockaddr_storage clntAddr;
-        ssize_t clntLen = sizeof(clntAddr);
+        socklen_t clntLen = sizeof(clntAddr);
         char buffer[1024];
-        numByteRcvd = recvfrom(servSock, buffer, 1024, 0, (
-        struct sockaddr *)&clntAddr, &clntLen);
+        numByteRcvd = recvfrom(servSock, buffer, 1024, 0,
+                               (struct sockaddr *)&clntAddr, &clntLen);
         if (numByteRcvd < 0) {
             if (errno != EWOULDBLOCK)
                 DieWithSystemMessage("recvfrom() failed");
