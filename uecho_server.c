@@ -24,7 +24,7 @@ int main(int argc, char *argv[]) {
         exit(1);
     }
 
-    serv_sock = socket(PF_INET, SOCK_STREAM, 0);
+    serv_sock = socket(PF_INET, SOCK_DGRAM, 0);
     if (serv_sock == -1) {
         error_handling("socket() error");
     }
@@ -38,22 +38,10 @@ int main(int argc, char *argv[]) {
         error_handling("bind() error");
     }
 
-    if (listen(serv_sock, 5) == -1) {
-        error_handling("listen() error");
-    }
-
-    clnt_adr_sz = sizeof(clnt_adr);
-    for (i = 0; i < 5; ++i) {
-        clnt_sock = accept(serv_sock, (struct sockaddr*)&clnt_adr, &clnt_adr_sz);
-        if (clnt_sock == -1) {
-            error_handling("accept() error");
-        } else {
-            printf("Connected client %d\n", i+1);
-        }
-        while ((str_len=read(clnt_sock, message, BUF_SIZE)) !=0) {
-            write(clnt_sock, message, str_len);
-        }
-        close(clnt_sock);
+    while (1) {
+        clnt_adr_sz = sizeof(clnt_adr);
+        str_len = recvfrom(serv_sock, message, BUF_SIZE, 0, (struct sockaddr*)&clnt_adr, &clnt_adr_sz);
+        sendto(serv_sock, message, str_len, 0, (struct sockaddr*)&clnt_adr, clnt_adr_sz);
     }
     close(serv_sock);
     return 0;
