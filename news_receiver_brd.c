@@ -20,7 +20,7 @@ int main(int argc, char *argv[])
     char buf[BUF_SIZE];
     struct sockaddr_in addr;
     struct ip_mreq join_addr;
-    if (argc != 3) {
+    if (argc != 2) {
         printf("Usage: %s <GroupIP> <PORT>\n", argv[0]);
         exit(1);
     }
@@ -29,7 +29,7 @@ int main(int argc, char *argv[])
     memset(&addr, 0, sizeof(addr));
     addr.sin_family = AF_INET;
     addr.sin_addr.s_addr = htonl(INADDR_ANY);
-    addr.sin_port = htons(atoi(argv[2]));
+    addr.sin_port = htons(atoi(argv[1]));
 
     if (bind(recv_sock, (struct sockaddr *)&addr, sizeof(addr)) == -1)
     {
