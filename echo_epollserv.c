@@ -47,6 +47,7 @@ int main(int argc, char *argv[])
 
     event.events = EPOLLIN;
     event.data.fd = serv_sock;
+    epoll_ctl(epfd, EPOLL_CTL_ADD, serv_sock, &event);
 
     while (1)
     {
