@@ -9,7 +9,6 @@
 #include <sys/socket.h>
 #include <sys/time.h>
 #include <sys/select.h>
-#include <w32api/_timeval.h>
 
 #define BUF_SIZE 100
 void error_handling(char *message);
