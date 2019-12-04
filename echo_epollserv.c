@@ -71,7 +71,7 @@ int main(int argc, char *argv[])
             }
             else
             {
-                str_len = read(ep_events->data.fd, buf, BUF_SIZE);
+                str_len = read(ep_events[i]->data.fd, buf, BUF_SIZE);
                 if (str_len == 0)
                 {
                     epoll_ctl(epfd, EPOLL_CTL_DEL, ep_events[i].data.fd, NULL);
