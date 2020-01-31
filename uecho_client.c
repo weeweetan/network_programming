@@ -47,7 +47,7 @@ int main(int argc, char *argv[]) {
         adr_sz = sizeof(from_adr);
         str_len=recvfrom(sock, message, BUF_SIZE, 0, (struct sockaddr*)&from_adr, &adr_sz);
         message[str_len]=0;
-        printf("Message from server: %s", message);
+        printf("Message from server: %s\n", message);
     }
     close(sock);
     return 0;
