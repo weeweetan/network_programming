@@ -1,5 +1,5 @@
 ## network_programming
-使用C语言实现的一些网络编程demo
+使用C语言实现的一些网络编程demo，参考书为TCP/IP网络编程
 
 # tips
 TCPEchoClient4.c与TCPEchoServer4.c是ipv4的客户端与服务端<br>
