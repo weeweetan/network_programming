@@ -1,43 +1,31 @@
-//
-// Created by tw on 2018/3/2.
-//
-#include <stdio.h>
-#include <stdlib.h>
-#include <stdint.h>
-#include "Practical.h"
+#include <errno.h>
 #include "Framer.h"
-static const char DELIMITER = '\n';
 
-int GetNextMsg(FILE *in, uint8_t *buf, size_t bufSize) {
-    int count = 0;
-    int nextChar;
-    while (count < bufSize) {
-        nextChar = getc(in);
-        if (nextChar == EOF) {
-            if (count > 0)
-                DieWithUserMessage("GetNextMsg()", "Stream ended prematurely");
-            else
-                return -1;
+int GetNextMsg(FILE *in, uint8_t *buf, size_t capacity)
+{
+    if (in == NULL || buf == NULL || capacity == 0) { errno = EINVAL; return -1; }
+    size_t length = 0;
+    for (;;) {
+        int byte = getc(in);
+        if (byte == EOF) {
+            if (ferror(in) && errno == EINTR) { clearerr(in); continue; }
+            if (length != 0) errno = EPROTO;
+            return -1;
         }
-        if (nextChar == DELIMITER)
-            break;
-        buf[count++] = nextChar;
-    }
-    if (nextChar != DELIMITER) {
-        return -count;
-    } else {
-        return count;
+        if (byte == '\n') return length > capacity ? -(int)length : (int)length;
+        if (length == UINT16_MAX) { errno = EMSGSIZE; return -1; }
+        if (length < capacity) buf[length] = (uint8_t)byte;
+        ++length;
     }
 }
 
-int PutMsg(uint8_t buf[], size_t msgSize, FILE *out) {
-    int i;
-    for (i = 0; i < msgSize; i++)
-        if (buf[i] == DELIMITER)
-            return -1;
-    if (fwrite(buf, 1, msgSize, out) != msgSize)
-        return -1;
-    fputc(DELIMITER, out);
-    fflush(out);
-    return msgSize;
+int PutMsg(uint8_t buf[], size_t length, FILE *out)
+{
+    if (out == NULL || (length != 0 && buf == NULL) || length > UINT16_MAX) {
+        errno = EINVAL; return -1;
+    }
+    for (size_t i = 0; i < length; ++i) if (buf[i] == '\n') { errno = EINVAL; return -1; }
+    if ((length != 0 && fwrite(buf, 1, length, out) != length) ||
+        putc('\n', out) == EOF || fflush(out) != 0) return -1;
+    return (int)length;
 }

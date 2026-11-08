@@ -1,110 +1,126 @@
-//
-// Created by Administrator on 2019/2/14.
-//
-#include <stdio.h>
-#include <stdlib.h>
-#include <string.h>
-#include <unistd.h>
-#include <arpa/inet.h>
-#include <sys/socket.h>
+#include <errno.h>
+#include <fcntl.h>
 #include <pthread.h>
+#include <stdio.h>
+#include <string.h>
+#include <time.h>
+#include <unistd.h>
+#include "common/net.h"
 
-#define BUF_SIZE 100
-#define MAX_CLNT 256
+enum { CHAT_CLIENTS = 128, CHAT_LINE = 2048 };
+typedef struct { pthread_t thread; int fd, started, done; } Worker;
+static Worker workers[CHAT_CLIENTS];
+static size_t active;
+static pthread_mutex_t lock = PTHREAD_MUTEX_INITIALIZER;
+static pthread_cond_t drained = PTHREAD_COND_INITIALIZER;
 
-void *handle_clnt(void *arg);
-void send_msg(char *msg, int len);
-void error_handling(char *msg);
-
-int clnt_cnt = 0;
-int clnt_socks[MAX_CLNT];
-pthread_mutex_t mutex;
-
-int main(int argc, char *argv[])
+static void broadcast(const unsigned char *bytes, size_t length)
 {
-    int serv_sock, clnt_sock;
-    struct sockaddr_in serv_adr, clnt_adr;
-    int clnt_adr_sz;
-    pthread_t t_id;
-    if (argc != 2)
-    {
-        printf("Usage: %s <port>\n", argv[0]);
-        exit(1);
-    }
-
-    pthread_mutex_init(&mutex, NULL);
-    serv_sock = socket(PF_INET, SOCK_STREAM, 0);\
-
-    memset(&serv_adr, 0, sizeof(serv_adr));
-    serv_adr.sin_family = AF_INET;
-    serv_adr.sin_addr.s_addr = htonl(INADDR_ANY);
-    serv_adr.sin_port = htons(atoi(argv[1]));
-
-    if (bind(serv_sock, (struct sockaddr *)&serv_adr, sizeof(serv_adr)) == -1)
-    {
-        error_handling("bind() error!");
-    }
-    if (listen(serv_sock, 5) == -1)
-    {
-        error_handling("listen() error!");
-    }
-
-    while (1)
-    {
-        clnt_adr_sz = sizeof(clnt_adr);
-        clnt_sock = accept(serv_sock, (struct sockaddr*)&clnt_adr, &clnt_adr_sz);
-        pthread_mutex_lock(&mutex);
-        clnt_socks[clnt_cnt++] = clnt_sock;
-        pthread_mutex_unlock(&mutex);
-
-        pthread_create(&t_id, NULL, handle_clnt,(void*)&clnt_sock);
-        pthread_detach(t_id);
-        printf("Connected client IP:%s\n", inet_ntoa(clnt_adr.sin_addr));
-    }
-    close(serv_sock);
-    return 0;
-}
-
-
-void *handle_clnt(void *arg)
-{
-    int clnt_sock = *((int *)arg);
-    int str_len = 0, i;
-    char msg[BUF_SIZE];
-
-    while ((str_len = read(clnt_sock, msg, sizeof(msg))) != 0)
-    {
-        send_msg(msg, str_len);
-    }
-    pthread_mutex_lock(&mutex);
-    for (i = 0; i < clnt_cnt; i++)
-    {
-        if (clnt_sock == clnt_socks[i])
-        {
-            while (i++<clnt_cnt-1)
-                clnt_socks[i] = clnt_socks[i+1];
-            break;
+    pthread_mutex_lock(&lock);
+    for (size_t i = 0; i < CHAT_CLIENTS; ++i) if (workers[i].started && !workers[i].done) {
+        size_t offset = 0;
+        while (offset < length) {
+            int flags = MSG_DONTWAIT;
+#ifdef MSG_NOSIGNAL
+            flags |= MSG_NOSIGNAL;
+#endif
+            ssize_t count = send(workers[i].fd, bytes + offset, length - offset, flags);
+            if (count > 0) offset += (size_t)count;
+            else if (count < 0 && errno == EINTR && !net_stopping) continue;
+            else { shutdown(workers[i].fd, SHUT_RDWR); break; }
         }
     }
+    pthread_mutex_unlock(&lock);
+}
 
-    clnt_cnt--;
-    pthread_mutex_unlock(&mutex);
-    close(clnt_sock);
+static void *serve(void *argument)
+{
+    Worker *worker = argument;
+    const int fd = worker->fd;
+    unsigned char bytes[4096], line[CHAT_LINE];
+    size_t used = 0;
+    int failed = 0;
+    while (!net_stopping && !failed) {
+        ssize_t count = net_receive(fd, bytes, sizeof bytes);
+        if (count < 0 && (errno == EAGAIN || errno == EWOULDBLOCK)) continue;
+        if (count <= 0) break;
+        for (ssize_t i = 0; i < count; ++i) {
+            if (used == sizeof line) { failed = 1; break; }
+            line[used++] = bytes[i];
+            if (bytes[i] == '\n') { broadcast(line, used); used = 0; }
+        }
+    }
+    if (!failed && used != 0 && !net_stopping) broadcast(line, used);
+    pthread_mutex_lock(&lock);
+    close(fd); /* Broadcasts only request shutdown; this worker owns close(). */
+    worker->done = 1;
+    --active;
+    pthread_cond_signal(&drained);
+    pthread_mutex_unlock(&lock);
     return NULL;
 }
 
-void send_msg(char *msg, int len)
+static void reap(void)
 {
-    int i;
-    pthread_mutex_lock(&mutex);
-    for (i = 0; i < clnt_cnt; i++)
-        write(clnt_socks[i], msg, len);
-    pthread_mutex_unlock(&mutex);
+    for (size_t i = 0; i < CHAT_CLIENTS; ++i) {
+        pthread_mutex_lock(&lock);
+        int finished = workers[i].started && workers[i].done;
+        pthread_mutex_unlock(&lock);
+        if (finished) {
+            pthread_join(workers[i].thread, NULL);
+            pthread_mutex_lock(&lock);
+            workers[i].started = 0;
+            pthread_mutex_unlock(&lock);
+        }
+    }
 }
 
-void error_handling(char *msg)
+int main(int argc, char **argv)
 {
-    fputs(msg, stderr);
-    fputc('\n', stderr);
-    exit(1);
+    NetServerOptions options;
+    if (net_server_options(argc, argv, &options) < 0) return 2;
+    if (net_init() < 0) return 1;
+    int listener = net_listener(options.host, options.port, SOCK_STREAM, AF_UNSPEC);
+    if (listener < 0) { perror("listen"); return 1; }
+    if (net_nonblocking(listener) < 0) { close(listener); return 1; }
+    net_report_listener(listener);
+    size_t accepted = 0;
+    int status = 0;
+    while (!net_stopping && (options.limit == 0 || accepted < options.limit)) {
+        struct pollfd event = {listener, POLLIN, 0};
+        int ready = poll(&event, 1, 200);
+        if (ready < 0) { if (errno == EINTR) continue; status = 1; break; }
+        if (ready == 0) { reap(); continue; }
+        int fd = net_accept(listener);
+        if (fd < 0) { if (errno == EAGAIN || errno == EWOULDBLOCK) continue; if (!net_stopping) status = 1; break; }
+        ++accepted;
+        int flags = fcntl(fd, F_GETFL);
+        if (flags < 0 || fcntl(fd, F_SETFL, flags & ~O_NONBLOCK) < 0) { close(fd); continue; }
+        reap();
+        pthread_mutex_lock(&lock);
+        size_t slot = 0;
+        while (slot < CHAT_CLIENTS && workers[slot].started) ++slot;
+        if (slot == CHAT_CLIENTS) { pthread_mutex_unlock(&lock); close(fd); continue; }
+        Worker *worker = &workers[slot];
+        worker->fd = fd; worker->started = 1; worker->done = 0; ++active;
+        int error = pthread_create(&worker->thread, NULL, serve, worker);
+        if (error != 0) { --active; worker->started = 0; close(fd); status = 1; }
+        pthread_mutex_unlock(&lock);
+    }
+    close(listener);
+    pthread_mutex_lock(&lock);
+    while (active != 0) {
+        if (net_stopping) for (size_t i = 0; i < CHAT_CLIENTS; ++i)
+            if (workers[i].started && !workers[i].done) shutdown(workers[i].fd, SHUT_RDWR);
+        struct timespec deadline;
+        clock_gettime(CLOCK_REALTIME, &deadline);
+        deadline.tv_nsec += 100000000;
+        if (deadline.tv_nsec >= 1000000000) { ++deadline.tv_sec; deadline.tv_nsec -= 1000000000; }
+        pthread_cond_timedwait(&drained, &lock, &deadline);
+    }
+    pthread_mutex_unlock(&lock);
+    reap(); /* Join all completed workers before destroying synchronization state. */
+    pthread_cond_destroy(&drained);
+    pthread_mutex_destroy(&lock);
+    return status;
 }

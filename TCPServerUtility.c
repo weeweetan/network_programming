@@ -1,126 +1,54 @@
-//
-// Created by tw on 2018/2/27.
-//
-#include <sched.h>
-#include <sys/socket.h>
-#include <unistd.h>
-#include <stdio.h>
-#include <netinet/in.h>
 #include <arpa/inet.h>
+#include <errno.h>
 #include <netdb.h>
 #include <string.h>
 #include "Practical.h"
+#include "common/net.h"
 
-void HandleTCPClient(int clntSocket)
+/* Borrows the descriptor: the accepting caller closes it exactly once. */
+void HandleTCPClient(int fd)
 {
-    char buffer[1024];
-
-    ssize_t numBytesRcvd = recv(clntSocket, buffer, 1024, 0);
-    if (numBytesRcvd < 0)
-        DieWithSystemMessage("recv() failed");
-
-    while (numBytesRcvd > 0) {
-        ssize_t numBytesSent = send(clntSocket, buffer, numBytesRcvd, 0);
-        if (numBytesSent < 0)
-            DieWithSystemMessage("send() failed");
-        else if (numBytesRcvd != numBytesSent)
-            DieWithUserMessage("send()", "sent unexpected number of bytes");
-        numBytesRcvd = recv(clntSocket, buffer, 1024, 0);
-        if (numBytesRcvd < 0)
-            DieWithSystemMessage("recv() failed");
+    unsigned char bytes[16384];
+    for (;;) {
+        ssize_t length = net_receive(fd, bytes, sizeof bytes);
+        if (length <= 0 || net_send_all(fd, bytes, (size_t)length) < 0) return;
     }
-    close(clntSocket);
 }
 
-void PrintSocketAddress(const struct sockaddr *address, FILE *strem)
+void PrintSocketAddress(const struct sockaddr *address, FILE *stream)
 {
-    if (address == NULL || strem == NULL)
-        return;
-    void *numericAddress;
-    char addrBUffer[INET6_ADDRSTRLEN];
-    in_port_t port;
-
-    switch (address->sa_family) {
-        case AF_INET:
-            numericAddress = &((struct sockaddr_in *)address)->sin_addr;
-            port = ntohs(((
-            struct sockaddr_in *)address)->sin_port);
-            break;
-        case AF_INET6:
-            numericAddress = &((struct sockaddr_in6 *)address)->sin6_addr;
-            port = ntohs(((
-            struct sockaddr_in6 *)address)->sin6_port);
-            break;
-        default:
-            fputs("[unknown type]", strem);
-            return;
-    }
-
-    if (inet_ntop(address->sa_family, numericAddress, addrBUffer, sizeof(addrBUffer)) == NULL)
-        fputs("[invalid address]", strem);
-    else {
-        fprintf(strem, "%s", addrBUffer);
-        if (port != 0)
-            fprintf(strem, "-%u", port);
-    }
+    if (address == NULL || stream == NULL) return;
+    socklen_t length;
+    if (address->sa_family == AF_INET) length = sizeof(struct sockaddr_in);
+    else if (address->sa_family == AF_INET6) length = sizeof(struct sockaddr_in6);
+    else { fputs("[unknown address]", stream); return; }
+    char host[1025], port[16];
+    if (getnameinfo(address, length, host, sizeof host, port, sizeof port, NI_NUMERICHOST | NI_NUMERICSERV) != 0)
+        fputs("[invalid address]", stream);
+    else fprintf(stream, address->sa_family == AF_INET6 ? "[%s]:%s" : "%s:%s", host, port);
 }
 
-
-static const int MAXPENDING = 5;
-
-int SetupTCPServerSocket(const char *service) {
-    //Construct the server address structure
-    struct addrinfo addrCriteria;
-    memset(&addrCriteria, 0, sizeof(addrCriteria));
-    addrCriteria.ai_family = AF_UNSPEC;
-    addrCriteria.ai_flags = AI_PASSIVE;
-    addrCriteria.ai_socktype = SOCK_STREAM;
-    addrCriteria.ai_protocol = IPPROTO_TCP;
-
-    struct addrinfo *servAddr;
-    int rtnVal = getaddrinfo(NULL, service, &addrCriteria, &servAddr);
-    if (rtnVal != 0)
-        DieWithUserMessage("getaddrinfo() failed", gai_strerror(rtnVal));
-    int servSock = -1;
-    struct addrinfo *addr = servAddr;
-    while (addr != NULL)
-    {
-        servSock = socket(servAddr->ai_family, servAddr->ai_socktype, servAddr->ai_protocol);
-        if (servSock < 0){
-            addr = addr->ai_next;
-            continue;
-        }
-
-        if ((bind(servSock, servAddr->ai_addr, servAddr->ai_addrlen) == 0) && (listen(servSock, MAXPENDING) == 0))
-        {
-            struct sockaddr_storage localAddr;
-            socklen_t addrSize = sizeof(localAddr);
-            if (getsockname(servSock, (struct sockaddr *)&localAddr, &addrSize) < 0)
-                DieWithSystemMessage("getsockname() failed");
-            fputs("Binding to ", stdout);
-            PrintSocketAddress((struct sockaddr *)&localAddr, stdout);
-            fputc('\n', stdout);
-            break;
-        }
-        close(servSock);
-        servSock = -1;
-        addr = addr->ai_next;
-    }
-    freeaddrinfo(servAddr);
-    return servSock;
-
+int SetupTCPServerSocket(const char *service)
+{
+    int fd = net_listener("127.0.0.1", service, SOCK_STREAM, AF_UNSPEC);
+    if (fd >= 0) net_report_listener(fd);
+    return fd;
 }
 
-int AcceptTCPConnection(int servSock) {
-    struct sockaddr_storage clntAddr;
-    socklen_t clntAddrLen = sizeof(clntAddr);
+int AcceptTCPConnection(int listener) { return net_accept(listener); }
 
-    int clntSock = accept(servSock, (struct sockaddr *)&clntAddr, &clntAddrLen);
-    if (clntSock < 0)
-        DieWithSystemMessage("accept() failed");
-    fputs("Handling client ", stdout);
-    PrintSocketAddress((struct sockaddr *)&clntAddr, stdout);
-    fputc('\n', stdout);
-
-    return clntSock;
+bool SockAddrsEqual(const struct sockaddr *left, const struct sockaddr *right)
+{
+    if (left == NULL || right == NULL) return left == right;
+    if (left->sa_family != right->sa_family) return false;
+    if (left->sa_family == AF_INET) {
+        const struct sockaddr_in *a = (const struct sockaddr_in *)left, *b = (const struct sockaddr_in *)right;
+        return a->sin_port == b->sin_port && a->sin_addr.s_addr == b->sin_addr.s_addr;
+    }
+    if (left->sa_family == AF_INET6) {
+        const struct sockaddr_in6 *a = (const struct sockaddr_in6 *)left, *b = (const struct sockaddr_in6 *)right;
+        return a->sin6_port == b->sin6_port && a->sin6_scope_id == b->sin6_scope_id &&
+            memcmp(&a->sin6_addr, &b->sin6_addr, sizeof a->sin6_addr) == 0;
+    }
+    return false;
 }

@@ -1,94 +1,37 @@
-//
-// Created by Administrator on 2018/12/29.
-//
 #include <stdio.h>
-#include <stdlib.h>
-#include <string.h>
 #include <unistd.h>
-#include <arpa/inet.h>
-#include <sys/socket.h>
+#include "common/net.h"
+#include "common/operator.h"
 
-#define BUF_SIZE 1024
-#define RLT_SIZE 4
-#define OPSZ 4
-
-void error_handling(char *message);
-int calculate(int opnum, int opnds[], char oprator);
-
-int main(int argc, char *argv[]) {
-    int serv_sock, clnt_sock;
-    char opinfo[BUF_SIZE];
-    int result, opnd_cnt, i;
-    int recv_cnt, recv_len;
-    struct sockaddr_in serv_adr, clnt_adr;
-    socklen_t clnt_adr_sz;
-    if (argc != 2) {
-        printf("Usage: %s <port> \n", argv[0]);
-        exit(1);
-    }
-
-    serv_sock = socket(PF_INET, SOCK_STREAM, 0);
-    if (serv_sock == -1) {
-        error_handling("socket() error");
-    }
-
-    memset(&serv_adr, 0, sizeof(serv_adr));
-    serv_adr.sin_family = AF_INET;
-    serv_adr.sin_addr.s_addr = htonl(INADDR_ANY);
-    serv_adr.sin_port = htons(atoi(argv[1]));
-
-    if (bind(serv_sock, (struct sockaddr*)&serv_adr, sizeof(serv_adr))==-1) {
-        error_handling("bind() error");
-    }
-
-    if (listen(serv_sock, 5) == -1) {
-        error_handling("listen() error");
-    }
-
-    clnt_adr_sz = sizeof(clnt_adr);
-    for (i = 0; i < 5; ++i) {
-        opnd_cnt = 0;
-        clnt_sock=accept(serv_sock, (struct sockaddr*)&clnt_adr, &clnt_adr_sz);
-        read(clnt_sock, &opnd_cnt, 1);
-
-        recv_len=0;
-        while ((opnd_cnt*OPSZ+1)>recv_len) {
-            recv_cnt=read(clnt_sock, &opinfo[recv_len], BUF_SIZE-1);
-            recv_len+=recv_cnt;
-        }
-        result=calculate(opnd_cnt, (int *)opinfo, opinfo[recv_len-1]);
-        write(clnt_sock, (char *)&result, sizeof(result));
-        close(clnt_sock);
-    }
-    close(serv_sock);
-    return 0;
-
+static void serve(int fd)
+{
+    unsigned char count;
+    if (net_receive_exact(fd, &count, 1) != 1 || count == 0 || count > 64) return;
+    unsigned char packet[64 * 4 + 1];
+    size_t length = (size_t)count * 4 + 1;
+    if (net_receive_exact(fd, packet, length) != 1) return;
+    int32_t values[64], result;
+    for (size_t i = 0; i < count; ++i) values[i] = net_get_i32(packet + i * 4);
+    if (net_calculate(values, count, (char)packet[length - 1], &result) < 0) return;
+    unsigned char response[4]; net_put_i32(response, result);
+    (void)net_send_all(fd, response, sizeof response);
 }
 
-int calculate(int opnum, int opnds[], char op) {
-    int result=opnds[0], i;
-    switch (op) {
-        case '+':
-            for (i = 1; i < opnum; ++i) {
-                result+=opnds[i];
-            }
-            break;
-        case '-':
-            for (i = 1; i < opnum; ++i) {
-                result-=opnds[i];
-            }
-            break;
-        case '*':
-            for (i = 1; i < opnum; ++i) {
-                result*=opnds[i];
-            }
-            break;
+int main(int argc, char **argv)
+{
+    NetServerOptions options;
+    if (net_server_options(argc, argv, &options) < 0) return 2;
+    if (net_init() < 0) return 1;
+    int listener = net_listener(options.host, options.port, SOCK_STREAM, AF_UNSPEC);
+    if (listener < 0) { perror("listen"); return 1; }
+    net_report_listener(listener);
+    size_t handled = 0;
+    int status = 0;
+    while (!net_stopping && (options.limit == 0 || handled < options.limit)) {
+        int fd = net_accept(listener);
+        if (fd < 0) { if (!net_stopping) status = 1; break; }
+        serve(fd); close(fd); ++handled;
     }
-    return result;
-}
-
-void error_handling(char *message) {
-    fputs(message, stderr);
-    fputc('\n', stderr);
-    exit(1);
+    close(listener);
+    return status;
 }

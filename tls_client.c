@@ -1,129 +1,106 @@
-#include <stdio.h>
-#include <errno.h>
-#include <unistd.h>
-#include <malloc.h>
-#include <string.h>
-#include <sys/socket.h>
-#include <resolv.h>
-#include <netdb.h>
-#include <openssl/ssl.h>
-#include <openssl/err.h>
 #include <arpa/inet.h>
+#include <ctype.h>
+#include <errno.h>
+#include <openssl/err.h>
+#include <openssl/ssl.h>
+#include <openssl/x509v3.h>
+#include <stdio.h>
+#include <string.h>
+#include <unistd.h>
+#include "common/net.h"
 
-#define FAIL    -1
-int OpenConnection(const char *hostname, int port)
+static int retry_ssl(SSL *ssl, int result, int fd, int64_t deadline)
 {
-    int sd;
-    struct hostent *host;
-    struct sockaddr_in addr;
-    if ( (host = gethostbyname(hostname)) == NULL )
-    {
-        perror(hostname);
-        abort();
-    }
-    sd = socket(PF_INET, SOCK_STREAM, 0);
-    bzero(&addr, sizeof(addr));
-    addr.sin_family = AF_INET;
-    addr.sin_port = htons(port);
-    //addr.sin_addr.s_addr = *(long*)(host->h_addr);
-    addr.sin_addr.s_addr = inet_addr(hostname);
-    if ( connect(sd, (struct sockaddr*)&addr, sizeof(addr)) != 0 )
-    {
-        close(sd);
-        perror(hostname);
-        abort();
-    }
-
-    write(sd, "PROXY TCP4 192.168.140.1 192.168.140.139 443 443 200\r\n", 54);
-    return sd;
+    int error = SSL_get_error(ssl, result);
+    if (net_stopping) { errno = EINTR; return -1; }
+    if (error == SSL_ERROR_WANT_READ) return net_wait(fd, POLLIN, deadline);
+    if (error == SSL_ERROR_WANT_WRITE) return net_wait(fd, POLLOUT, deadline);
+    if (error == SSL_ERROR_SYSCALL && errno == EINTR) return 0;
+    return -1;
 }
-SSL_CTX* InitCTX(void)
+
+static int valid_name(const char *name)
 {
-    SSL_METHOD *method;
-    SSL_CTX *ctx;
-    OpenSSL_add_all_algorithms();  /* Load cryptos, et.al. */
-    SSL_load_error_strings();   /* Bring in and register error messages */
-    //method = TLSv1_2_client_method();  /* Create new client-method instance */
-    method = TLS_client_method();  /* Create new client-method instance */
-    ctx = SSL_CTX_new(method);   /* Create new context */
-    if ( ctx == NULL )
-    {
+    size_t length = strlen(name);
+    if (length == 0 || length > 253) return 0;
+    for (const unsigned char *p = (const unsigned char *)name; *p; ++p)
+        if (!isalnum(*p) && *p != '.' && *p != '-' && *p != ':') return 0;
+    return 1;
+}
+
+int main(int argc, char **argv)
+{
+    if (argc < 3 || argc > 5 || net_port(argv[2], 0) < 0) {
+        fprintf(stderr, "Usage: %s HOST PORT [CA_FILE [SERVER_NAME]]\n", argv[0]);
+        return 2;
+    }
+    const char *name = argc == 5 ? argv[4] : argv[1];
+    if (!valid_name(name)) { fputs("Invalid verification name\n", stderr); return 2; }
+    if (net_init() < 0) return 1;
+    int fd = -1, status = 1, connected = 0;
+    SSL_CTX *context = SSL_CTX_new(TLS_client_method());
+    SSL *ssl = NULL;
+    if (context == NULL || SSL_CTX_set_min_proto_version(context, TLS1_2_VERSION) != 1) goto cleanup;
+    SSL_CTX_set_verify(context, SSL_VERIFY_PEER, NULL);
+    if (argc >= 4) {
+        if (SSL_CTX_load_verify_locations(context, argv[3], NULL) != 1) goto cleanup;
+    } else if (SSL_CTX_set_default_verify_paths(context) != 1) goto cleanup;
+
+    ssl = SSL_new(context);
+    if (ssl == NULL) goto cleanup;
+    unsigned char address[sizeof(struct in6_addr)];
+    int ip = inet_pton(AF_INET, name, address) == 1 || inet_pton(AF_INET6, name, address) == 1;
+    if (ip) {
+        if (X509_VERIFY_PARAM_set1_ip_asc(SSL_get0_param(ssl), name) != 1) goto cleanup;
+    } else {
+        if (SSL_set1_host(ssl, name) != 1 || SSL_set_tlsext_host_name(ssl, name) != 1) goto cleanup;
+        SSL_set_hostflags(ssl, X509_CHECK_FLAG_NO_PARTIAL_WILDCARDS);
+    }
+    fd = net_connect(argv[1], argv[2], SOCK_STREAM, AF_UNSPEC);
+    if (fd < 0 || net_nonblocking(fd) < 0 || SSL_set_fd(ssl, fd) != 1) goto cleanup;
+    int64_t deadline = net_now_ms() + 5000;
+    for (;;) {
+        int result = SSL_connect(ssl);
+        if (result == 1) { connected = 1; break; }
+        if (retry_ssl(ssl, result, fd, deadline) < 0) goto cleanup;
+    }
+    if (SSL_get_verify_result(ssl) != X509_V_OK) goto cleanup;
+    fprintf(stderr, "Verified TLS connection (%s)\n", SSL_get_version(ssl));
+
+    char request[1024];
+    int default_port = strcmp(argv[2], "443") == 0;
+    int length = snprintf(request, sizeof request, "GET / HTTP/1.1\r\nHost: %s%s%s%s%s\r\nConnection: close\r\n\r\n",
+                          strchr(name, ':') != NULL ? "[" : "", name, strchr(name, ':') != NULL ? "]" : "",
+                          default_port ? "" : ":", default_port ? "" : argv[2]);
+    if (length < 0 || (size_t)length >= sizeof request) goto cleanup;
+    size_t offset = 0;
+    deadline = net_now_ms() + 10000;
+    while (offset < (size_t)length) {
+        int result = SSL_write(ssl, request + offset, length - (int)offset);
+        if (result > 0) offset += (size_t)result;
+        else if (retry_ssl(ssl, result, fd, deadline) < 0) goto cleanup;
+    }
+    for (;;) {
+        unsigned char bytes[16384];
+        int received = SSL_read(ssl, bytes, sizeof bytes);
+        if (received > 0) {
+            if (fwrite(bytes, 1, (size_t)received, stdout) != (size_t)received) goto cleanup;
+        } else {
+            int error = SSL_get_error(ssl, received);
+            if (error == SSL_ERROR_ZERO_RETURN) { status = 0; break; }
+            if (retry_ssl(ssl, received, fd, deadline) < 0) goto cleanup;
+        }
+        if (net_now_ms() >= deadline) { errno = ETIMEDOUT; goto cleanup; }
+    }
+cleanup:
+    if (status != 0) {
+        fputs("TLS exchange failed\n", stderr);
         ERR_print_errors_fp(stderr);
-        abort();
+        if (errno == ETIMEDOUT) perror("TLS timeout");
     }
-    return ctx;
-}
-void ShowCerts(SSL* ssl)
-{
-    X509 *cert;
-    char *line;
-    cert = SSL_get_peer_certificate(ssl); /* get the server's certificate */
-    if ( cert != NULL )
-    {
-        printf("Server certificates:\n");
-        line = X509_NAME_oneline(X509_get_subject_name(cert), 0, 0);
-        printf("Subject: %s\n", line);
-        free(line);       /* free the malloc'ed string */
-        line = X509_NAME_oneline(X509_get_issuer_name(cert), 0, 0);
-        printf("Issuer: %s\n", line);
-        free(line);       /* free the malloc'ed string */
-        X509_free(cert);     /* free the malloc'ed certificate copy */
-    }
-    else
-        printf("Info: No client certificates configured.\n");
-}
-int main(int count, char *strings[])
-{
-    SSL_CTX *ctx;
-    int server;
-    SSL *ssl;
-    char buf[1024];
-    char acClientRequest[1024] = {0};
-    int bytes;
-    char *hostname, *portnum;
-    if ( count != 3 )
-    {
-        printf("usage: %s <hostname> <portnum>\n", strings[0]);
-        exit(0);
-    }
-    SSL_library_init();
-    hostname=strings[1];
-    portnum=strings[2];
-    ctx = InitCTX();
-    server = OpenConnection(hostname, atoi(portnum));
-    ssl = SSL_new(ctx);      /* create new SSL connection state */
-    SSL_set_fd(ssl, server);    /* attach the socket descriptor */
-    if ( SSL_connect(ssl) == FAIL )   /* perform the connection */
-        ERR_print_errors_fp(stderr);
-    else
-    {
-#if 0
-        char acUsername[16] = {0};
-        char acPassword[16] = {0};
-
-        const char *cpRequestMessage = "<Body>\
-                               <UserName>%s<UserName>\
-                 <Password>%s<Password>\
-                 <\Body>";
-        printf("Enter the User Name : ");
-        scanf("%s",acUsername);
-        printf("\n\nEnter the Password : ");
-        scanf("%s",acPassword);
-        sprintf(acClientRequest, cpRequestMessage, acUsername,acPassword);   /* construct reply */
-#endif
-        printf("\n\nConnected with %s encryption\n", SSL_get_cipher(ssl));
-        ShowCerts(ssl);        /* get any certs */
-
-        //strcpy(acClientRequest, "GET /login HTTP/1.1\r\nCookie:backend1=53d6ef47ea11181e3821822695cbc6ab|1632646440|1632646440; Domain=www.hello.com; Path=/\r\nHost:www.ctyun.com\r\n\r\n");
-        strcpy(acClientRequest, "GET /login HTTP/1.1\r\nHost:www.test.com\r\n\r\n");
-
-        SSL_write(ssl,acClientRequest, strlen(acClientRequest));   /* encrypt & send message */
-        bytes = SSL_read(ssl, buf, sizeof(buf)); /* get reply & decrypt */
-        buf[bytes] = 0;
-        printf("Received: \"%s\"\n", buf);
-        SSL_free(ssl);        /* release connection state */
-    }
-    close(server);         /* close socket */
-    SSL_CTX_free(ctx);        /* release context */
-    return 0;
+    if (connected) (void)SSL_shutdown(ssl); /* Nonblocking: never wait indefinitely during cleanup. */
+    SSL_free(ssl);
+    if (fd >= 0) close(fd);
+    SSL_CTX_free(context);
+    return status;
 }
