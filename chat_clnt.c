@@ -1,94 +1,65 @@
-//
-// Created by Administrator on 2019/2/14.
-//
+#include <errno.h>
 #include <stdio.h>
-#include <stdlib.h>
 #include <string.h>
 #include <unistd.h>
-#include <arpa/inet.h>
-#include <sys/socket.h>
-#include <pthread.h>
-#define BUF_SIZE 100
-#define NAME_SIZE 20
+#include "common/net.h"
 
-void *send_msg(void *arg);
-void *recv_msg(void *arg);
-void error_handling(char *msg);
-
-char name[NAME_SIZE] = "[DEFAULT]";
-char msg[BUF_SIZE];
-
-int main(int argc, char *argv[])
+static int send_line(int fd, const char *label, const unsigned char *line, size_t length)
 {
-    int sock;
-    struct sockaddr_in serv_addr;
-    pthread_t snd_thread, rcv_thread;
-    void *thread_return;
-    if (argc != 4)
-    {
-        printf("Usage: %s <IP> <port> <name>\n", argv[0]);
-        exit(1);
-    }
-
-    sprintf(name, "[%s]", argv[3]);
-    sock = socket(PF_INET, SOCK_STREAM, 0);
-
-    memset(&serv_addr, 0, sizeof(serv_addr));
-    serv_addr.sin_family = AF_INET;
-    serv_addr.sin_addr.s_addr = inet_addr(argv[1]);
-    serv_addr.sin_port = htons(atoi(argv[2]));
-
-    if (connect(sock, (struct sockaddr*)&serv_addr, sizeof(serv_addr)) == -1)
-        error_handling("connect() error!");
-
-    pthread_create(&snd_thread, NULL, send_msg, (void *)&sock);
-    pthread_create(&rcv_thread, NULL, recv_msg, (void *)&sock);
-    pthread_join(snd_thread, &thread_return);
-    pthread_join(rcv_thread, &thread_return);
-    close(sock);
-    return 0;
-
+    unsigned char message[1100];
+    size_t prefix = strlen(label);
+    memcpy(message, label, prefix); memcpy(message + prefix, line, length);
+    return net_send_all(fd, message, prefix + length);
 }
 
-
-void *send_msg(void *arg)
+int main(int argc, char **argv)
 {
-    int sock = *((int *)arg);
-    char name_msg[NAME_SIZE+BUF_SIZE];
-
-    while (1)
-    {
-        fgets(msg, BUF_SIZE, stdin);
-        if (!strcmp(msg, "q\n")||!strcmp(msg, "Q\n"))
-        {
-            close(sock);
-            exit(0);
+    if (argc != 4 || net_port(argv[2], 0) < 0 || strlen(argv[3]) == 0 || strlen(argv[3]) > 16 ||
+        strpbrk(argv[3], "\r\n") != NULL) {
+        fprintf(stderr, "Usage: %s HOST PORT NAME (1..16 bytes)\n", argv[0]); return 2;
+    }
+    if (net_init() < 0) return 1;
+    int fd = net_connect(argv[1], argv[2], SOCK_STREAM, AF_UNSPEC);
+    if (fd < 0) { perror("connect"); return 1; }
+    char label[32]; snprintf(label, sizeof label, "[%s] ", argv[3]);
+    unsigned char line[1025];
+    size_t used = 0;
+    int input_open = 1, status = 0;
+    int64_t deadline = 0;
+    while (!net_stopping) {
+        struct pollfd events[2] = {{fd, POLLIN, 0}, {input_open ? STDIN_FILENO : -1, POLLIN, 0}};
+        if (!input_open && net_now_ms() >= deadline) { fputs("Chat shutdown timeout\n", stderr); status = 1; break; }
+        int ready = poll(events, 2, 200);
+        if (ready < 0) { if (errno == EINTR) continue; status = 1; break; }
+        if (events[0].revents & (POLLIN | POLLHUP | POLLERR)) {
+            unsigned char bytes[4096];
+            ssize_t count = net_receive(fd, bytes, sizeof bytes);
+            if (count == 0) break;
+            if (count < 0 || fwrite(bytes, 1, (size_t)count, stdout) != (size_t)count) { status = 1; break; }
+            fflush(stdout);
         }
-        sprintf(name_msg, "%s %s", name, msg);
-        write(sock, name_msg, strlen(name_msg));
+        if (input_open && (events[1].revents & (POLLIN | POLLHUP))) {
+            unsigned char bytes[1024];
+            ssize_t count = read(STDIN_FILENO, bytes, sizeof bytes);
+            if (count < 0) { if (errno == EINTR) continue; status = 1; break; }
+            if (count == 0) {
+                if (used != 0 && send_line(fd, label, line, used) < 0) { status = 1; break; }
+                used = 0; input_open = 0;
+            } else for (ssize_t i = 0; i < count; ++i) {
+                line[used++] = bytes[i];
+                if (used == sizeof line) { fputs("Chat line exceeds 1024 bytes\n", stderr); status = 2; input_open = 0; break; }
+                if (bytes[i] == '\n') {
+                    if (used == 2 && (line[0] == 'q' || line[0] == 'Q') && line[1] == '\n') {
+                        used = 0; input_open = 0; break;
+                    }
+                    if (send_line(fd, label, line, used) < 0) { status = 1; input_open = 0; break; }
+                    used = 0;
+                }
+            }
+            if (!input_open) { shutdown(fd, SHUT_WR); deadline = net_now_ms() + 5000; }
+            if (status != 0) break;
+        }
     }
-    return NULL;
-}
-
-void *recv_msg(void *arg)
-{
-    int sock = *((int *)arg);
-    char name_msg[NAME_SIZE+BUF_SIZE];
-    int str_len;
-    while (1)
-    {
-        str_len = read(sock, name_msg, NAME_SIZE+BUF_SIZE-1);
-        if (str_len == -1)
-            return (void *) -1;
-        name_msg[str_len] = 0;
-        fputs(name_msg, stdout);
-    }
-    return NULL;
-}
-
-void error_handling(char *msg)
-{
-    fputs(msg, stderr);
-    fputc('\n', stderr);
-    exit(1);
+    close(fd);
+    return status;
 }

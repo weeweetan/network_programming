@@ -1,67 +1,53 @@
-//
-// Created by tw on 2018/3/2.
-//
+#include <inttypes.h>
 #include <stdio.h>
-#include <string.h>
-#include <stdbool.h>
-#include <stdint.h>
 #include <unistd.h>
-#include <errno.h>
-#include <sys/socket.h>
-#include <arpa/inet.h>
-#include "Practical.h"
-#include "VoteProtocol.h"
-#include "VoteEncoding.h"
+#include "common/net.h"
 #include "Framer.h"
+#include "VoteEncoding.h"
 
-static  uint64_t counts[MAX_CANDIDATE + 1];
+static uint64_t counts[MAX_CANDIDATE + 1];
 
-int main(int argc, char *argv[]) {
-    if (argc != 2)
-        DieWithUserMessage("Parametes(s)", "<Server Port/Service>");
-
-    int servSock = SetupTCPServerSocket(argv[1]);
-
-    for (;;)
-    {
-        int clntSock = AcceptTCPConnection(servSock);
-
-        //Create an input stream from the socket
-        FILE *channel = fdopen(clntSock, "r+");
-        if (channel == NULL)
-            DieWithSystemMessage("fdopen() failed");
-
-        //Receive messages until connection closes;
-        int mSize;
-        uint8_t  inBuf[MAX_WIRE_SIZE];
-        VoteInfo v;
-        while ((mSize = GetNextMsg(channel, inBuf, MAX_WIRE_SIZE)) > 0) {
-            memset(&v, 0, sizeof(v));
-            printf("Recevied message (%d bytes)\n", mSize);
-            if (Decode(inBuf, mSize, &v)) {
-                if (!v.isResponse) {
-                    v.isResponse = true;
-                    if (v.condidate >= 0 && v.condidate <= MAX_CANDIDATE) {
-                        if (!v.isInquiry)
-                            counts[v.condidate] += 1;
-                        v.count = counts[v.condidate];
-                    }
-                }
-                uint8_t outBuf[MAX_WIRE_SIZE];
-                mSize = Encode(&v, outBuf, MAX_WIRE_SIZE);
-                if (PutMsg(outBuf, mSize, channel) < 0) {
-                    fputs("Error framing/outputting message\n",stdout);
-                    break;
-                } else {
-                    printf("Processed %s for candidate %d;current count is %llu.\n", (v.isInquiry ? "inquiry" : "vote"), v.condidate, v.count);
-                }
-                fflush(channel);
-            } else {
-                fputs("Parse error, closing connection.\n", stderr);
-                break;
-            }
+static void serve(int fd)
+{
+    FILE *in = NULL, *out = NULL;
+    if (net_streams(fd, &in, &out) < 0) { perror("fdopen"); return; }
+    uint8_t payload[MAX_WIRE_SIZE];
+    int length;
+    while (!net_stopping && (length = GetNextMsg(in, payload, sizeof payload)) >= 0) {
+        VoteInfo value = {0};
+        if (!Decode(payload, (size_t)length, &value) || value.isResponse) {
+            fputs("Invalid vote request; closing peer\n", stderr);
+            break;
         }
-        puts("Client finished");
-        fclose(channel);
+        if (!value.isInquiry) {
+            if (counts[value.condidate] == UINT64_MAX) { fputs("Vote counter exhausted\n", stderr); break; }
+            ++counts[value.condidate];
+        }
+        value.isResponse = true;
+        value.count = counts[value.condidate];
+        size_t response_length = Encode(&value, payload, sizeof payload);
+        if (response_length == 0 || PutMsg(payload, response_length, out) < 0) break;
     }
+    fclose(out);
+    fclose(in);
+}
+
+int main(int argc, char **argv)
+{
+    NetServerOptions options;
+    if (net_server_options(argc, argv, &options) < 0) return 2;
+    if (net_init() < 0) return 1;
+    int listener = net_listener(options.host, options.port, SOCK_STREAM, AF_UNSPEC);
+    if (listener < 0) { perror("listen"); return 1; }
+    net_report_listener(listener);
+    size_t handled = 0;
+    int status = 0;
+    while (!net_stopping && (options.limit == 0 || handled < options.limit)) {
+        int fd = net_accept(listener);
+        if (fd < 0) { if (!net_stopping) { perror("accept"); status = 1; } break; }
+        serve(fd); /* FILE streams consume and close the socket. */
+        ++handled;
+    }
+    close(listener);
+    return status;
 }

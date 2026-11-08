@@ -1,75 +1,36 @@
-//
-// Created by tw on 2018/3/2.
-//
-/**
- * Routines for binary encoding of vote messages
- */
+#include <errno.h>
+#include "VoteEncoding.h"
 
+enum { MAGIC = 0x5400, INQUIRY = 0x0100, RESPONSE = 0x0200 };
 
-#include <string.h>
-#include <stdbool.h>
-#include <stdlib.h>
-#include <stdint.h>
-#include <netinet/in.h>
-#include "Practical.h"
-#include "VoteProtocol.h"
-
-enum {
-    REQUSET_SIZE = 4,
-    RESPONSE_SIZE = 12,
-    COUNT_SHIFT = 32,
-    INQUIRE_FLAG = 0x0100,
-    RESPONSE_FLAG = 0x0200,
-    MAGIC = 0x5400,
-    MAGIC_MASK = 0xfc00
-};
-
-typedef struct voteMsgBin voteMsgBin;
-struct voteMsgBin {
-    uint16_t header;
-    uint16_t candidateID;
-    uint16_t countHigh;
-    uint16_t countLow;
-};
-
-size_t Encode(VoteInfo *v, uint8_t *outBuf, size_t bufSize) {
-    if ((v->isResponse && bufSize < sizeof(struct voteMsgBin)) || bufSize < 2 * sizeof(uint16_t))
-        DieWithUserMessage("Output buffer too small", "");
-    voteMsgBin *vm = (voteMsgBin *)outBuf;
-    memset(outBuf, 0, sizeof(voteMsgBin));
-    vm->header = MAGIC;
-    if (v->isInquiry)
-        vm->header |= INQUIRE_FLAG;
-    if (v->isResponse)
-        vm->header |= RESPONSE_FLAG;
-    vm->header = htons(vm->header);
-    vm->candidateID = htons(v->condidate);
-    if (v->isResponse) {
-        vm->countHigh = htonl(v->count >> COUNT_SHIFT);
-        vm->countLow = htonl((uint32_t) v->count);
-        return RESPONSE_SIZE;
-    } else {
-        return RESPONSE_SIZE;
+size_t Encode(const VoteInfo *value, uint8_t *out, size_t capacity)
+{
+    if (value == NULL || out == NULL || value->condidate < 0 || value->condidate > MAX_CANDIDATE) {
+        errno = EINVAL; return 0;
     }
+    size_t length = value->isResponse ? 12 : 4;
+    if (capacity < length) { errno = EMSGSIZE; return 0; }
+    unsigned header = MAGIC | (value->isInquiry ? INQUIRY : 0) | (value->isResponse ? RESPONSE : 0);
+    out[0] = (uint8_t)(header >> 8); out[1] = (uint8_t)header;
+    out[2] = (uint8_t)((unsigned)value->condidate >> 8); out[3] = (uint8_t)value->condidate;
+    if (value->isResponse)
+        for (unsigned i = 0; i < 8; ++i) out[4 + i] = (uint8_t)(value->count >> (56 - i * 8));
+    return length;
 }
 
-
-/*
- * Extract message info from given buffer.
- * Leave input unchanged.
- */
-bool Decode(uint8_t *inBuf, size_t mSize, VoteInfo *v) {
-    voteMsgBin *vm = (voteMsgBin *)inBuf;
-
-    uint16_t header = ntohs(vm->header);
-    if ((mSize < RESPONSE_SIZE) || ((header & MAGIC_MASK) != MAGIC))
-        return false;
-    /* message is big enough and includes correct magic number */
-    v->isResponse = ((header & RESPONSE_FLAG) != 0);
-    v->isInquiry = ((header & INQUIRE_FLAG) != 0);
-    v->condidate = ntohs(vm->candidateID);
-    if (v->isResponse && mSize >= RESPONSE_SIZE) {
-        v->count = ((uint64_t) ntohl(vm->countHigh) << COUNT_SHIFT) | (uint64_t) ntohl(vm->countLow);
-    }
+bool Decode(const uint8_t *in, size_t length, VoteInfo *value)
+{
+    if (in == NULL || value == NULL || length < 4) return false;
+    unsigned header = ((unsigned)in[0] << 8) | in[1];
+    if ((header & 0xfcffu) != MAGIC) return false;
+    VoteInfo parsed = {0};
+    parsed.isInquiry = (header & INQUIRY) != 0;
+    parsed.isResponse = (header & RESPONSE) != 0;
+    if (length != (parsed.isResponse ? 12u : 4u)) return false;
+    parsed.condidate = (int)(((unsigned)in[2] << 8) | in[3]);
+    if (parsed.condidate > MAX_CANDIDATE) return false;
+    if (parsed.isResponse)
+        for (unsigned i = 0; i < 8; ++i) parsed.count = (parsed.count << 8) | in[4 + i];
+    *value = parsed;
     return true;
 }

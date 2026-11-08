@@ -1,95 +1,62 @@
-//
-// Created by tw on 2018/3/2.
-//
-/**
- * Routines for Text encoding of vote messages.
- * Wire Format:
- * "Voting <v|i> [R] <candidate ID> <count>"
- *
- */
-
-#include <string.h>
-#include <stdint.h>
-#include <stdbool.h>
-#include <stdlib.h>
+#include <errno.h>
+#include <inttypes.h>
 #include <stdio.h>
+#include <string.h>
 #include "VoteEncoding.h"
-#include "VoteProtocol.h"
 
-static const char *MAGIC = "Voting";
-static const char *VOTESTR = "v";
-static const char *INQSTR = "s";
-static const char *RESPONSESTR = "R";
-static const char *DELIMSTR = " ";
-
-enum {
-    BASE = 10
-};
-
-/**
- * Encode voting message info as text string.
- * WARNING: Message will be silently truncate if buffer if too small
- * Invariants (e.g 0 <=candidate <= 1000) not checked.
- *
- */
-size_t Encode(const VoteInfo *v, uint8_t *outBuf, const size_t bufSize) {
-    uint8_t *bufPtr = outBuf;
-    long size = (size_t) bufSize;
-    int rv = snprintf((char *)bufPtr, size, "%s %c %s %d", MAGIC, (v->isInquiry ? 'i':'v'), (v->isResponse ? "R" : ""), v->condidate);
-    bufPtr += rv;
-    size -= rv;
-    if (v->isResponse) {
-        rv = snprintf((char *) bufPtr, size, " %llu", v->count);
-        bufPtr += rv;
+static int decimal(const char *text, uint64_t maximum, uint64_t *value)
+{
+    if (*text == '\0') return -1;
+    uint64_t number = 0;
+    for (const unsigned char *p = (const unsigned char *)text; *p; ++p) {
+        if (*p < '0' || *p > '9') return -1;
+        unsigned digit = *p - '0';
+        if (digit > maximum || number > (maximum - digit) / 10) return -1;
+        number = number * 10 + digit;
     }
-    return (size_t) (bufPtr - outBuf);
+    *value = number;
+    return 0;
 }
 
-/**
- * Extract message information form given buffer.
- * Note:modifies input buffer.
- */
- bool Decode(uint8_t *inBuf, const size_t mSize, VoteInfo *v) {
-     char *token;
-     token = strtok((char *)inBuf, DELIMSTR);
-     //Check for maginc
-     if (token == NULL || strcmp(token, MAGIC) != 0)
-         return false;
+size_t Encode(const VoteInfo *value, uint8_t *out, size_t capacity)
+{
+    if (value == NULL || out == NULL || value->condidate < 0 || value->condidate > MAX_CANDIDATE) {
+        errno = EINVAL; return 0;
+    }
+    char text[128];
+    int length = value->isResponse ?
+        snprintf(text, sizeof text, "Voting %c R %d %" PRIu64, value->isInquiry ? 'i' : 'v', value->condidate, value->count) :
+        snprintf(text, sizeof text, "Voting %c %d", value->isInquiry ? 'i' : 'v', value->condidate);
+    if (length < 0 || (size_t)length >= sizeof text || (size_t)length > capacity) {
+        errno = EMSGSIZE; return 0;
+    }
+    memcpy(out, text, (size_t)length);
+    return (size_t)length;
+}
 
-     //Get vote/inquiry indicator
-     token = strtok(NULL, DELIMSTR);
-     if (token == NULL)
-         return false;
-
-     if (strcmp(token, VOTESTR) == 0)
-         v->isInquiry = false;
-     else if (strcmp(token, INQSTR) == 0)
-         v->isInquiry = true;
-     else
-         return false;
-
-     //Next token is either Response flag or candidate ID
-     token = strtok(NULL, DELIMSTR);
-     if (token == NULL)
-         return false;
-
-     if (strcmp(token, RESPONSESTR) == 0) {
-         v->isResponse = true;
-         token = strtok(NULL, DELIMSTR);
-         if (token == NULL)
-             return false;
-     } else {
-         v->isResponse = false;
-     }
-     //Get candidate
-     v->condidate = atoi(token);
-     if (v->isResponse) {
-         token = strtok(NULL, DELIMSTR);
-         if (token == NULL)
-             return false;
-         v->count = strtoll(token, NULL, BASE);
-     } else {
-         v->count = 0L;
-     }
-     return true;
- }
+bool Decode(const uint8_t *in, size_t length, VoteInfo *value)
+{
+    if (in == NULL || value == NULL || length == 0 || length > MAX_WIRE_SIZE || memchr(in, 0, length) != NULL)
+        return false;
+    char text[MAX_WIRE_SIZE + 1];
+    memcpy(text, in, length); text[length] = '\0';
+    char *tokens[6], *save = NULL;
+    size_t count = 0;
+    for (char *p = strtok_r(text, " \t", &save); p != NULL; p = strtok_r(NULL, " \t", &save)) {
+        if (count == 6) return false;
+        tokens[count++] = p;
+    }
+    if (count < 3 || strcmp(tokens[0], "Voting") != 0 ||
+        (strcmp(tokens[1], "i") != 0 && strcmp(tokens[1], "v") != 0)) return false;
+    VoteInfo parsed = {0};
+    parsed.isInquiry = strcmp(tokens[1], "i") == 0;
+    parsed.isResponse = strcmp(tokens[2], "R") == 0;
+    size_t candidate_index = parsed.isResponse ? 3 : 2;
+    if (count != (parsed.isResponse ? 5u : 3u)) return false;
+    uint64_t candidate;
+    if (decimal(tokens[candidate_index], MAX_CANDIDATE, &candidate) < 0) return false;
+    parsed.condidate = (int)candidate;
+    if (parsed.isResponse && decimal(tokens[4], UINT64_MAX, &parsed.count) < 0) return false;
+    *value = parsed;
+    return true;
+}

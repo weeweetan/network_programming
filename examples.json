@@ -1,0 +1,387 @@
+[
+  {
+    "name": "tcp-echo-server",
+    "source": "TCPEchoServer.c",
+    "title": "通用 TCP 顺序回显",
+    "model": "server",
+    "libraries": [
+      "net_core"
+    ],
+    "feature": "core",
+    "platform": "posix"
+  },
+  {
+    "name": "tcp-echo-server4",
+    "source": "TCPEchoServer4.c",
+    "title": "IPv4 TCP 顺序回显",
+    "model": "server",
+    "libraries": [
+      "net_core"
+    ],
+    "feature": "core",
+    "platform": "posix"
+  },
+  {
+    "name": "tcp-echo-client",
+    "source": "TCPEchoClient.c",
+    "title": "通用 TCP 单次回显客户端",
+    "model": "word-client",
+    "libraries": [
+      "net_core"
+    ],
+    "feature": "core",
+    "platform": "posix"
+  },
+  {
+    "name": "tcp-echo-client4",
+    "source": "TCPEchoClient4.c",
+    "title": "IPv4 TCP 单次回显客户端",
+    "model": "word-client",
+    "libraries": [
+      "net_core"
+    ],
+    "feature": "core",
+    "platform": "posix"
+  },
+  {
+    "name": "echo-server",
+    "source": "echo_server.c",
+    "title": "章节 TCP 回显入口",
+    "model": "server",
+    "libraries": [
+      "net_core"
+    ],
+    "feature": "core",
+    "platform": "posix"
+  },
+  {
+    "name": "echo-client",
+    "source": "echo_client.c",
+    "title": "交互式 TCP 回显",
+    "model": "interactive-client",
+    "libraries": [
+      "net_core"
+    ],
+    "feature": "core",
+    "platform": "posix"
+  },
+  {
+    "name": "echo-client2",
+    "source": "echo_client2.c",
+    "title": "分段接收的交互式入口",
+    "model": "interactive-client",
+    "libraries": [
+      "net_core"
+    ],
+    "feature": "core",
+    "platform": "posix"
+  },
+  {
+    "name": "stdio-echo-server",
+    "source": "echo_stdserver.c",
+    "title": "独立 FILE 流回显",
+    "model": "server",
+    "libraries": [
+      "net_core"
+    ],
+    "feature": "core",
+    "platform": "posix"
+  },
+  {
+    "name": "stdio-echo-client",
+    "source": "echo_stdclient.c",
+    "title": "FILE 示例客户端入口",
+    "model": "interactive-client",
+    "libraries": [
+      "net_core"
+    ],
+    "feature": "core",
+    "platform": "posix"
+  },
+  {
+    "name": "hello-server",
+    "source": "hello_server.c",
+    "title": "单连接问候服务",
+    "model": "greeting-server",
+    "libraries": [
+      "net_core"
+    ],
+    "feature": "core",
+    "platform": "posix"
+  },
+  {
+    "name": "hello-client",
+    "source": "hello_client.c",
+    "title": "完整读取问候响应",
+    "model": "greeting-client",
+    "libraries": [
+      "net_core"
+    ],
+    "feature": "core",
+    "platform": "posix"
+  },
+  {
+    "name": "tcp-server",
+    "source": "tcp_server.c",
+    "title": "问候服务章节别名",
+    "model": "greeting-server",
+    "libraries": [
+      "net_core"
+    ],
+    "feature": "core",
+    "platform": "posix"
+  },
+  {
+    "name": "tcp-client",
+    "source": "tcp_client.c",
+    "title": "问候客户端章节别名",
+    "model": "greeting-client",
+    "libraries": [
+      "net_core"
+    ],
+    "feature": "core",
+    "platform": "posix"
+  },
+  {
+    "name": "udp-echo-server",
+    "source": "UDPEchoServer.c",
+    "title": "通用 UDP 回显",
+    "model": "udp-server",
+    "libraries": [
+      "net_core"
+    ],
+    "feature": "core",
+    "platform": "posix"
+  },
+  {
+    "name": "uecho-server",
+    "source": "uecho_server.c",
+    "title": "章节 UDP 回显入口",
+    "model": "udp-server",
+    "libraries": [
+      "net_core"
+    ],
+    "feature": "core",
+    "platform": "posix"
+  },
+  {
+    "name": "udp-echo-client",
+    "source": "UDPEchoClient.c",
+    "title": "已连接 UDP 回显客户端",
+    "model": "udp-client",
+    "libraries": [
+      "net_core"
+    ],
+    "feature": "core",
+    "platform": "posix"
+  },
+  {
+    "name": "udp-timeout-client",
+    "source": "UDPEchoClient-Timeout.c",
+    "title": "有界重试 UDP 客户端",
+    "model": "udp-client",
+    "libraries": [
+      "net_core"
+    ],
+    "feature": "core",
+    "platform": "posix"
+  },
+  {
+    "name": "uecho-client",
+    "source": "uecho_client.c",
+    "title": "交互式 UDP 回显",
+    "model": "udp-interactive",
+    "libraries": [
+      "net_core"
+    ],
+    "feature": "core",
+    "platform": "posix"
+  },
+  {
+    "name": "select-echo-server",
+    "source": "echo_selectserv.c",
+    "title": "select 并发回显",
+    "model": "multiplex-echo",
+    "libraries": [
+      "net_core"
+    ],
+    "feature": "core",
+    "platform": "posix"
+  },
+  {
+    "name": "select-rot13-server",
+    "source": "select_based_server.c",
+    "title": "select ROT13 字节流",
+    "model": "multiplex-rot13",
+    "libraries": [
+      "net_core"
+    ],
+    "feature": "core",
+    "platform": "posix"
+  },
+  {
+    "name": "chat-server",
+    "source": "chat_server.c",
+    "title": "按行广播的 pthread 聊天服务",
+    "model": "chat-server",
+    "libraries": [
+      "net_core",
+      "Threads::Threads"
+    ],
+    "feature": "core",
+    "platform": "posix"
+  },
+  {
+    "name": "chat-client",
+    "source": "chat_clnt.c",
+    "title": "同时处理标准输入与服务端 EOF",
+    "model": "chat-client",
+    "libraries": [
+      "net_core"
+    ],
+    "feature": "core",
+    "platform": "posix"
+  },
+  {
+    "name": "op-server",
+    "source": "op_server.c",
+    "title": "网络字节序算术协议服务",
+    "model": "op-server",
+    "libraries": [
+      "net_core"
+    ],
+    "feature": "core",
+    "platform": "posix"
+  },
+  {
+    "name": "op-client",
+    "source": "op_client.c",
+    "title": "校验输入的算术客户端",
+    "model": "op-client",
+    "libraries": [
+      "net_core"
+    ],
+    "feature": "core",
+    "platform": "posix"
+  },
+  {
+    "name": "epoll-echo-server",
+    "source": "echo_epollserv.c",
+    "title": "epoll LT 回显",
+    "model": "multiplex-echo",
+    "libraries": [
+      "net_core"
+    ],
+    "feature": "core",
+    "platform": "linux"
+  },
+  {
+    "name": "epoll-lt-server",
+    "source": "echo_EPLTserv.c",
+    "title": "epoll LT 章节别名",
+    "model": "multiplex-echo",
+    "libraries": [
+      "net_core"
+    ],
+    "feature": "core",
+    "platform": "linux"
+  },
+  {
+    "name": "epoll-et-server",
+    "source": "echo_EPETserv.c",
+    "title": "epoll ET + ONESHOT 回显",
+    "model": "multiplex-echo",
+    "libraries": [
+      "net_core"
+    ],
+    "feature": "core",
+    "platform": "linux"
+  },
+  {
+    "name": "libevent-rot13-server",
+    "source": "libevent_based_server.c",
+    "title": "libevent 读写事件",
+    "model": "multiplex-rot13",
+    "libraries": [
+      "net_event"
+    ],
+    "feature": "libevent",
+    "platform": "posix"
+  },
+  {
+    "name": "libevent-buffered-rot13-server",
+    "source": "libevent_based_server_simply.c",
+    "title": "libevent bufferevent",
+    "model": "multiplex-rot13",
+    "libraries": [
+      "net_event"
+    ],
+    "feature": "libevent",
+    "platform": "posix"
+  },
+  {
+    "name": "vote-client-bin",
+    "source": "VoteClientTCP.c",
+    "title": "投票客户端（bin）",
+    "model": "vote-client",
+    "libraries": [
+      "net_core",
+      "codec-bin",
+      "framer-length"
+    ],
+    "feature": "core",
+    "platform": "posix"
+  },
+  {
+    "name": "vote-server-bin",
+    "source": "VoteServerTCP.c",
+    "title": "投票服务端（bin）",
+    "model": "vote-server",
+    "libraries": [
+      "net_core",
+      "codec-bin",
+      "framer-length"
+    ],
+    "feature": "core",
+    "platform": "posix"
+  },
+  {
+    "name": "vote-client-text",
+    "source": "VoteClientTCP.c",
+    "title": "投票客户端（text）",
+    "model": "vote-client",
+    "libraries": [
+      "net_core",
+      "codec-text",
+      "framer-delim"
+    ],
+    "feature": "core",
+    "platform": "posix"
+  },
+  {
+    "name": "vote-server-text",
+    "source": "VoteServerTCP.c",
+    "title": "投票服务端（text）",
+    "model": "vote-server",
+    "libraries": [
+      "net_core",
+      "codec-text",
+      "framer-delim"
+    ],
+    "feature": "core",
+    "platform": "posix"
+  },
+  {
+    "name": "tls-client",
+    "source": "tls_client.c",
+    "title": "验证证书与名称的 TLS 客户端",
+    "model": "tls-client",
+    "libraries": [
+      "net_core",
+      "OpenSSL::SSL",
+      "OpenSSL::Crypto"
+    ],
+    "feature": "tls",
+    "platform": "posix"
+  }
+]
