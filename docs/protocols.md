@@ -6,7 +6,9 @@
 
 回显协议原样返回字节，没有隐含字符串结尾。单次客户端发送后 `shutdown(SHUT_WR)`，服务端读到 EOF 后完成输出，客户端仍能接收响应。标准输入交互客户端以 q / Q 或 EOF 结束，最后一个不带换行的片段也会发送。
 
-`net_streams` 通过 dup 为读、写分别创建 FILE，避免在同一个更新流上切换读写时违反缓冲规则。它在成功与失败时都接管原描述符；调用者只需分别 fclose，不能再 close 原 fd。`HandleTCPClient` 则只借用 fd，关闭责任在调用者。
+`net_streams` 为读、写分别创建 FILE，避免在同一个更新流上切换读写时违反缓冲规则。它为原描述符设置 `FD_CLOEXEC`，通过 `F_DUPFD_CLOEXEC` 原子创建同样带该标志的写描述符，避免普通 dup 清除该标志后，socket 泄漏到 exec 启动的新程序。仅 fork 尚未 exec 时仍会继承描述符；父进程的流继续保持可用。
+
+该函数在成功与失败时都接管原描述符；调用者只需分别 fclose，不能再 close 原 fd。`HandleTCPClient` 则只借用 fd，关闭责任在调用者。
 
 ## 并发与背压
 
