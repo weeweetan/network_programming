@@ -29,7 +29,9 @@ ssize_t net_receive(int fd, void *buffer, size_t length);
 int net_send_all(int fd, const void *buffer, size_t length);
 int net_receive_exact(int fd, void *buffer, size_t length);
 void net_report_listener(int fd);
-/* Consumes fd on both success and failure; each FILE owns a distinct fd. */
+/* Consumes fd on both success and failure; each FILE owns a distinct fd.
+ * Both stream descriptors are close-on-exec, including initially unmarked fd.
+ */
 int net_streams(int fd, FILE **input, FILE **output);
 int net_run_echo_server(int argc, char **argv, int family, int greeting, int stdio_mode);
 int net_run_echo_client(int argc, char **argv, int family, int greeting, int interactive);

@@ -243,7 +243,12 @@ void net_report_listener(int fd)
 int net_streams(int fd, FILE **input, FILE **output)
 {
     *input = *output = NULL;
-    int copy = dup(fd);
+    int flags = fcntl(fd, F_GETFD);
+    if (flags < 0 || fcntl(fd, F_SETFD, flags | FD_CLOEXEC) < 0) {
+        int error = errno; close(fd); errno = error; return -1;
+    }
+    /* dup() clears FD_CLOEXEC; create the second descriptor with it atomically. */
+    int copy = fcntl(fd, F_DUPFD_CLOEXEC, 0);
     if (copy < 0) { int error = errno; close(fd); errno = error; return -1; }
     FILE *reader = fdopen(fd, "rb");
     if (reader == NULL) { int error = errno; close(fd); close(copy); errno = error; return -1; }
