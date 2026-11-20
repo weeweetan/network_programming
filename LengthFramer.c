@@ -1,6 +1,14 @@
 #include <errno.h>
 #include "Framer.h"
 
+static int read_byte(FILE *in)
+{
+    int byte;
+    while ((byte = getc(in)) == EOF && ferror(in) && errno == EINTR)
+        clearerr(in);
+    return byte;
+}
+
 static int read_bytes(FILE *in, uint8_t *bytes, size_t length)
 {
     size_t used = 0;
@@ -18,10 +26,10 @@ static int read_bytes(FILE *in, uint8_t *bytes, size_t length)
 int GetNextMsg(FILE *in, uint8_t *buf, size_t bufSize)
 {
     if (in == NULL || buf == NULL || bufSize == 0) { errno = EINVAL; return -1; }
-    int first = getc(in);
+    int first = read_byte(in);
     if (first == EOF) return -1;
-    int second = getc(in);
-    if (second == EOF) { errno = EPROTO; return -1; }
+    int second = read_byte(in);
+    if (second == EOF) { if (feof(in)) errno = EPROTO; return -1; }
     size_t length = ((unsigned)first << 8) | (unsigned)second;
     size_t copied = length < bufSize ? length : bufSize;
     if (read_bytes(in, buf, copied) < 0) return -1;
