@@ -25,7 +25,7 @@ CI 的 Linux GCC 普通构建、Linux Clang ASan/UBSan 和 macOS Clang ASan/UBSa
 
 | 检查 | 核心场景 |
 | --- | --- |
-| 两种 Framer | 空帧、NUL 字节、60000 字节超长帧排空、下一帧对齐、部分 EOF、刷新失败 |
+| 两种 Framer | 空帧、NUL 字节、60000 字节超长帧排空、下一帧对齐、部分 EOF、刷新失败；长度前缀中断重试与原始 I/O 错误保留 |
 | 两种投票 Codec | 64 位边界计数、非对齐内存、精确容量、坏长度 / 标记 / 数字、输入不变 |
 | socket 公共层 | 小发送缓冲区下的 1 MiB 完整写入、截断检测、SIGPIPE、FILE 描述符所有权、fork/exec 后的 socket 非继承与父进程继续读写、失败清理 |
 | TCP 与事件模型 | 512 KiB 二进制分段消息、延迟读取、半关闭、反复连接、RST 后继续服务 |
@@ -41,6 +41,8 @@ CI 的 Linux GCC 普通构建、Linux Clang ASan/UBSan 和 macOS Clang ASan/UBSa
 集成测试只连接 `127.0.0.1` / `::1`，使用系统分配的临时端口，不请求公网 TLS / DNS 服务，不要求 root 权限，不修改系统配置。UDP 大包在 Linux 使用 65000 字节，macOS 使用 8000 字节以适应系统默认限制。IPv6 不可用时只略过 IPv6 场景。
 
 FILE 流继承回归只通过 fork/exec 启动测试程序自身，并保留一个不带 close-on-exec 标志的 socket 作对照；按设备与 inode 判断原 socket 是否泄漏，避免加载器复用 fd 编号造成误报。覆盖调用前已设置和未设置该标志的两种输入，随后确认父进程仍可双向收发、关闭后描述符失效，以及初始化失败不会遗留原描述符。
+
+长度分帧回归通过 macOS `funopen` / Linux `fopencookie` 创建受控 FILE，逐字节提供输入，在指定位置连续返回 3 次 `EINTR`。新增 15 个场景覆盖两个前缀字节、帧体、空帧、超长帧排空和后续帧对齐，以及前缀的 `EIO` / `EAGAIN` 和起始/部分 EOF；检查错误标志、原始 `errno` 和帧内容。测试包含在原有 `framing-length` 组中。
 
 TLS 测试需要 Python ssl 模块和 openssl 命令，在临时目录生成有效期 1 天的测试 CA 和证书，用完自动删除。不会写入系统信任库。单个 CTest 超时为 60 秒；服务端通过有限连接 / 数据报计数退出，失败时测试脚本终止并回收进程。
 
